@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from src.agents.middlewares.title_middleware import TitleMiddleware
-from src.config.title_config import TitleConfig, get_title_config, set_title_config
+from deerflow.agents.middlewares.title_middleware import TitleMiddleware
+from deerflow.config.title_config import TitleConfig, get_title_config, set_title_config
 
 
 def _clone_title_config(config: TitleConfig) -> TitleConfig:
@@ -78,7 +78,7 @@ class TestTitleMiddlewareCoreLogic:
         middleware = TitleMiddleware()
         fake_model = MagicMock()
         fake_model.ainvoke = AsyncMock(return_value=MagicMock(content='"A very long generated title"'))
-        monkeypatch.setattr("src.agents.middlewares.title_middleware.create_chat_model", lambda **kwargs: fake_model)
+        monkeypatch.setattr("deerflow.agents.middlewares.title_middleware.create_chat_model", lambda **kwargs: fake_model)
 
         state = {
             "messages": [
@@ -92,12 +92,42 @@ class TestTitleMiddlewareCoreLogic:
         assert "'" not in title
         assert len(title) == 12
 
+    def test_generate_title_normalizes_structured_message_and_response_content(self, monkeypatch):
+        _set_test_title_config(max_chars=20)
+        middleware = TitleMiddleware()
+        fake_model = MagicMock()
+        fake_model.ainvoke = AsyncMock(
+            return_value=MagicMock(content=[{"type": "text", "text": '"结构总结"'}]),
+        )
+        monkeypatch.setattr(
+            "deerflow.agents.middlewares.title_middleware.create_chat_model",
+            lambda **kwargs: fake_model,
+        )
+
+        state = {
+            "messages": [
+                HumanMessage(content=[{"type": "text", "text": "请帮我总结这段代码"}]),
+                AIMessage(content=[{"type": "text", "text": "好的，先看结构"}]),
+            ]
+        }
+
+        title = asyncio.run(middleware._generate_title(state))
+
+        prompt = fake_model.ainvoke.await_args.args[0]
+        assert "请帮我总结这段代码" in prompt
+        assert "好的，先看结构" in prompt
+        # Ensure structured message dict/JSON reprs are not leaking into the prompt.
+        assert "{'type':" not in prompt
+        assert "'type':" not in prompt
+        assert '"type":' not in prompt
+        assert title == "结构总结"
+
     def test_generate_title_fallback_when_model_fails(self, monkeypatch):
         _set_test_title_config(max_chars=20)
         middleware = TitleMiddleware()
         fake_model = MagicMock()
         fake_model.ainvoke = AsyncMock(side_effect=RuntimeError("LLM unavailable"))
-        monkeypatch.setattr("src.agents.middlewares.title_middleware.create_chat_model", lambda **kwargs: fake_model)
+        monkeypatch.setattr("deerflow.agents.middlewares.title_middleware.create_chat_model", lambda **kwargs: fake_model)
 
         state = {
             "messages": [
